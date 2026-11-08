@@ -1,0 +1,5 @@
+{
+ "label": "@@PANEL_LABEL_JSON@@",
+ "color": "@@PANEL_COLOR@@",
+ "trusted_networks": @@TRUSTED_NETS_JSON@@
+}

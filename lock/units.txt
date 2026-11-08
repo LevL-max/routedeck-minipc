@@ -1,0 +1,23 @@
+# Unit states as on Mini-PC 2 (2026-11-08). install.sh applies them after the files.
+# Mode engines (mihomo, sing-box) start on demand when the mode is switched.
+enable awg-auto.service
+enable isc-dhcp-server.service
+enable netfilter-persistent.service
+enable ModemManager.service
+enable router-cpu-boost.service
+enable router-panel.service
+enable router-restore.service
+enable router-runtime-late.service
+enable router-wan-boot.service
+enable router-wan-guard-early.service
+enable router-wan.service
+enable xray.service
+enable router-kernel-retention.timer
+enable router-wan-recover.timer
+enable xray-recover.timer
+disable mihomo.service
+disable sing-box.service
+disable router-mode.service
+disable router-policy.service
+disable isc-dhcp-server6.service
+disable nftables.service

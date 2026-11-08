@@ -1,0 +1,15 @@
+[Unit]
+Description=Mihomo full-TUN engine for Mini-PC router
+Wants=network-online.target
+After=network-online.target
+[Service]
+Type=simple
+ExecStartPre=/usr/local/sbin/mihomo-wait-lan
+ExecStart=/usr/local/bin/mihomo -d /etc/mihomo -f /etc/mihomo/config.yaml
+ExecStartPost=/usr/local/sbin/mihomo-runtime-hook post-start
+ExecStopPost=/usr/local/sbin/mihomo-runtime-hook post-stop
+Restart=on-failure
+RestartSec=3
+LimitNOFILE=1048576
+[Install]
+WantedBy=multi-user.target

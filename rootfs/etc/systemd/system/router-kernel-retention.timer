@@ -1,0 +1,11 @@
+[Unit]
+Description=Recheck Mini-PC kernel retention after boot and periodically
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=12h
+Unit=router-kernel-retention.service
+
+[Install]
+WantedBy=timers.target
+

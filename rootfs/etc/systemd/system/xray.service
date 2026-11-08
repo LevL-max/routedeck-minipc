@@ -1,0 +1,31 @@
+[Unit]
+Description=Original Xray core - Mihomo VLESS SOCKS bridge
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=router-xray
+Group=router-xray
+ExecStartPre=+/usr/bin/python3 /usr/local/lib/router-xray/prepare_config.py
+ExecStartPre=/usr/local/bin/xray run -test -config /etc/xray/config.json
+ExecStart=/usr/local/bin/xray run -config /etc/xray/config.json
+Restart=on-failure
+RestartSec=2
+LimitNOFILE=65536
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/etc/xray
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+
+[Install]
+WantedBy=multi-user.target

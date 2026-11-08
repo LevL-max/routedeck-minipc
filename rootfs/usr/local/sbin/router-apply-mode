@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+# router-apply-mode; OpenFlux removed 2026-10-16 (openflux-removed-v1)
+MODE="${ROUTER_MODE_OVERRIDE:-$(cat /etc/router/mode 2>/dev/null || echo direct)}"
+LAN_IF="@@LAN_IF@@"
+LEGACY="/usr/local/lib/router-mihomo/legacy/router-apply-mode"
+COMMENT="LAN_MODE_MARK"
+remove_mark(){ local m="$1"; while iptables -t mangle -C PREROUTING -i "$LAN_IF" -m comment --comment "$COMMENT" -j MARK --set-xmark "$m"/0xffffffff 2>/dev/null; do iptables -t mangle -D PREROUTING -i "$LAN_IF" -m comment --comment "$COMMENT" -j MARK --set-xmark "$m"/0xffffffff; done; }
+remove_all(){ remove_mark 0x1; remove_mark 0x2; remove_mark 0x3; }
+case "$MODE" in
+  direct|awg|tun)
+    if [[ "$MODE" == awg ]]; then
+      ip rule add fwmark 0x1 lookup 100 priority 100 2>/dev/null || true
+      ip route replace unreachable default table 100 metric 32767
+    elif [[ "$MODE" == tun ]]; then
+      ip rule add fwmark 0x2 lookup 110 priority 110 2>/dev/null || true
+      ip route replace unreachable default table 110 metric 32767
+    fi
+    remove_mark 0x3
+    exec "$LEGACY"
+    ;;
+  mihomo)
+    ip rule add fwmark 0x3 lookup 120 priority 120 2>/dev/null || true
+    ip route replace unreachable default table 120 metric 32767
+    remove_all
+    iptables -t mangle -A PREROUTING -i "$LAN_IF" -m comment --comment "$COMMENT" -j MARK --set-xmark 0x3/0xffffffff
+    echo "Applied LAN mode: mihomo"
+    ;;
+  *) echo "Unknown mode: $MODE" >&2; exit 1 ;;
+esac

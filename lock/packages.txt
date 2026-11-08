@@ -1,0 +1,29 @@
+# apt packages install.sh installs (Ubuntu 22.04 + PPA amnezia/ppa).
+# AmneziaWG: DKMS kernel module for the HWE kernel + awg / awg-quick
+amneziawg
+amneziawg-tools
+# HWE kernel 6.8 with headers (DKMS) and cpupower (root crontab @reboot)
+linux-generic-hwe-22.04
+linux-headers-generic-hwe-22.04
+linux-tools-generic-hwe-22.04
+# LAN DHCP server, firewall persistence, connection tracking, resolver glue
+isc-dhcp-server
+iptables-persistent
+netfilter-persistent
+nftables
+conntrack
+resolvconf
+# 4G modem stack used by router-wan (ModemManager + QMI tools)
+modemmanager
+libqmi-utils
+usb-modeswitch
+# tools the router scripts call
+cron
+python3
+python3-yaml
+jq
+curl
+ethtool
+tcpdump
+unzip
+gnupg

@@ -1,0 +1,15 @@
+[Unit]
+Description=Monitor Ethernet and LTE internet; preserve the selected router mode
+After=router-wan-boot.service router-restore.service ModemManager.service
+Wants=router-wan-boot.service ModemManager.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/lib/router-wan/wan_daemon.py
+Restart=always
+RestartSec=5
+UMask=0077
+TimeoutStopSec=8
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,10 @@
+[Unit]
+Description=Apply a guarded WAN or mobile-network setting
+After=ModemManager.service
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/python3 /usr/local/lib/router-wan/wan_control.py worker
+RuntimeMaxSec=780
+TimeoutStopSec=5
+UMask=0077

@@ -1,0 +1,87 @@
+#!/bin/bash
+set -euo pipefail
+
+MODE="$(cat /etc/router/mode 2>/dev/null || echo direct)"
+
+LAN_CIDR="192.168.50.0/24"
+WAN_IF="@@WAN_IF@@"
+WG_IF="wg0"
+TUN_IF="tun0"
+
+# Routing tables
+grep -qE '^\s*100\s+awg\s*$' /etc/iproute2/rt_tables || echo "100 awg" >> /etc/iproute2/rt_tables
+grep -qE '^\s*110\s+tun\s*$' /etc/iproute2/rt_tables || echo "110 tun" >> /etc/iproute2/rt_tables
+
+ensure_nat() {
+  iptables -t nat -C POSTROUTING -s "$LAN_CIDR" -o "$1" -j MASQUERADE 2>/dev/null || \
+  iptables -t nat -A POSTROUTING -s "$LAN_CIDR" -o "$1" -j MASQUERADE
+}
+
+remove_nat() {
+  while iptables -t nat -C POSTROUTING -s "$LAN_CIDR" -o "$1" -j MASQUERADE 2>/dev/null; do
+    iptables -t nat -D POSTROUTING -s "$LAN_CIDR" -o "$1" -j MASQUERADE
+  done
+}
+
+# --- Ensure tunnel state (NO wg flapping) ---
+case "$MODE" in
+  direct)
+    systemctl stop sing-box >/dev/null 2>&1 || true
+    /usr/bin/awg-quick down "$WG_IF" >/dev/null 2>&1 || true
+    ;;
+  awg)
+    systemctl stop sing-box >/dev/null 2>&1 || true
+    ip link show "$WG_IF" >/dev/null 2>&1 || \
+      /usr/bin/awg-quick up "$WG_IF" >/dev/null 2>&1 || true
+    ;;
+  tun)
+    systemctl start sing-box
+    /usr/bin/awg-quick down "$WG_IF" >/dev/null 2>&1 || true
+    ;;
+esac
+
+# --- Policy routing ---
+if ip link show "$WG_IF" >/dev/null 2>&1; then
+  ip route replace default dev "$WG_IF" table awg
+  ip rule add fwmark 0x1 lookup awg priority 100 2>/dev/null || true
+fi
+
+if ip link show "$TUN_IF" >/dev/null 2>&1; then
+  ip route replace default dev "$TUN_IF" table tun
+  ip rule add fwmark 0x2 lookup tun priority 110 2>/dev/null || true
+fi
+
+# Apply LAN marking (PREROUTING only, SSH-safe)
+/usr/local/sbin/router-apply-mode
+
+# --- CRITICAL FIX: flush LAN conntrack on AWG switch ---
+if [[ "$MODE" == "awg" ]] && command -v conntrack >/dev/null 2>&1; then
+  conntrack -D -s "$LAN_CIDR" >/dev/null 2>&1 || true
+  conntrack -D -d "$LAN_CIDR" >/dev/null 2>&1 || true
+fi
+
+# --- NAT exclusivity ---
+case "$MODE" in
+  direct)
+    ensure_nat "$WAN_IF"
+    remove_nat "$WG_IF"
+    remove_nat "$TUN_IF"
+    ;;
+  awg)
+    remove_nat "$WAN_IF"
+    ensure_nat "$WG_IF"
+    remove_nat "$TUN_IF"
+    ;;
+  tun)
+    remove_nat "$WAN_IF"
+    remove_nat "$WG_IF"
+    ensure_nat "$TUN_IF"
+    ;;
+esac
+
+# --- MSS clamp ---
+iptables -t mangle -C FORWARD -o "$WG_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || \
+iptables -t mangle -A FORWARD -o "$WG_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+
+iptables -t mangle -C FORWARD -i "$WG_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || \
+iptables -t mangle -A FORWARD -i "$WG_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu

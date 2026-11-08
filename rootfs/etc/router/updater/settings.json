@@ -1,0 +1,1 @@
+{"wan": "@@WAN_IF@@", "lan": "@@LAN_IF@@", "runtime_check": "read-only"}

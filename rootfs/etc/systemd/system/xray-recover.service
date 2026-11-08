@@ -1,0 +1,8 @@
+[Unit]
+Description=Recover an interrupted Xray core update
+After=network-online.target xray.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/router-xray-control --recover
+TimeoutStartSec=120

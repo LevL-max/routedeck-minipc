@@ -1,0 +1,8 @@
+[Unit]
+Description=Recover an incomplete WAN change locally
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/lib/router-wan/wan_control.py recover
+TimeoutStartSec=360
+UMask=0077

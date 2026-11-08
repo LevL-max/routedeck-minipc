@@ -1,0 +1,197 @@
+#!/bin/bash
+set -euo pipefail
+# 2026-09-28: the active profile is read from /etc/sing-box/config.json itself (its proxy
+# outbounds: type/server/port) instead of trusting the state file alone, so "reapply (same
+# config)" keeps the running server and a rotation really moves to another profile.
+# `tun-rotator probe` prints the detected profile and exits without touching anything.
+
+# ===== CONFIG =====
+TUN_IF="tun0"
+
+SB_DIR="/etc/sing-box"
+VAR_DIR="$SB_DIR/configs"
+ACTIVE_CFG="$SB_DIR/config.json"
+
+LOG="/var/log/tun-rotator.log"
+
+# Persistent state (survives reboot)
+STATE_DIR="/var/lib/router/tun-rotator"
+ACTIVE_FILE="$STATE_DIR/active"
+FAIL_FILE="$STATE_DIR/fail_count"
+LOCK_FILE="/run/tun-rotator.lock"
+LAST_REAPPLY_FILE="$STATE_DIR/last_reapply"
+LAST_ROTATE_FILE="$STATE_DIR/last_rotate"
+
+URL1="https://1.1.1.1/cdn-cgi/trace"
+URL2="https://www.google.com/generate_204"
+CURL_MAX_TIME=8
+
+REAPPLY_AT=3
+ROTATE_AT=6
+REAPPLY_COOLDOWN=30
+ROTATE_COOLDOWN=120
+
+# In your design, net-tun repairs policy/NAT after daemon reload
+NET_TUN="/usr/local/sbin/net-tun"
+MODE_FILE="/etc/router/mode"
+# ==================
+
+variants(){ (cd "$VAR_DIR" 2>/dev/null && ls -1 tun_*.json 2>/dev/null | sed 's/\.json$//' | sort) || true; }
+
+# Profile identity: the proxy outbounds (type:server:port) of a sing-box config.
+identity(){
+  python3 - "$1" 2>/dev/null <<'PY' || true
+import json, sys
+try:
+    config = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(0)
+items = sorted('%s:%s:%s' % (o.get('type'), o.get('server'), o.get('server_port'))
+               for o in config.get('outbounds', []) if o.get('server'))
+print('|'.join(items))
+PY
+}
+
+# The profile that is really running: config.json identity first, then the state file, else "custom".
+get_active(){
+  local cur v saved
+  cur="$(identity "$ACTIVE_CFG")"
+  if [[ -n "$cur" ]]; then
+    while read -r v; do
+      if [[ -n "$v" && "$(identity "$VAR_DIR/$v.json")" == "$cur" ]]; then echo "$v"; return; fi
+    done < <(variants)
+  fi
+  saved="$(tr -d '[:space:]' < "$ACTIVE_FILE" 2>/dev/null || true)"
+  if [[ -n "$saved" && -f "$VAR_DIR/$saved.json" ]]; then echo "$saved"; return; fi
+  echo custom
+}
+
+if [[ "${1:-}" == probe ]]; then
+  echo "active=$(get_active)"
+  exit 0
+fi
+
+mkdir -p "$STATE_DIR"
+touch "$LOG"
+chmod 600 "$LOG" 2>/dev/null || true
+
+exec 9>"$LOCK_FILE"
+flock -n 9 || exit 0
+
+ts(){ date "+%F %T"; }
+log(){ echo "[$(ts)] $*" >> "$LOG"; }
+now(){ date +%s; }
+
+set_active(){ echo "$1" > "$ACTIVE_FILE"; }
+
+fail_get(){ [[ -f "$FAIL_FILE" ]] && cat "$FAIL_FILE" || echo 0; }
+fail_set(){ echo "$1" > "$FAIL_FILE"; }
+fail_reset(){ echo 0 > "$FAIL_FILE"; }
+
+cooldown_ok(){
+  local f="$1" s="$2"
+  local n l=0
+  n="$(now)"
+  [[ -f "$f" ]] && l="$(cat "$f")"
+  (( n - l >= s ))
+}
+
+mode_is_tun(){
+  [[ "$(cat "$MODE_FILE" 2>/dev/null || echo "")" == "tun" ]]
+}
+
+health_ok(){
+  ip link show "$TUN_IF" >/dev/null 2>&1 || return 1
+  curl -fsS --max-time "$CURL_MAX_TIME" --interface "$TUN_IF" "$URL1" >/dev/null 2>&1 && return 0
+  curl -fsS --max-time "$CURL_MAX_TIME" --interface "$TUN_IF" "$URL2" >/dev/null 2>&1 && return 0
+  return 1
+}
+
+# IMPORTANT: sing-box must reload config (restart), then net-tun repairs routing/NAT
+reload_current(){
+  # Reload sing-box so new outbound is actually used
+  systemctl restart sing-box >/dev/null 2>&1 || true
+
+  # Re-apply your authoritative tun routing/NAT policy
+  "$NET_TUN" >/dev/null 2>&1 || true
+}
+
+apply_variant(){
+  local v="$1"
+  cp -f "$VAR_DIR/$v.json" "$ACTIVE_CFG"
+  reload_current
+}
+
+restart_stage1(){
+  local cur
+  cur="$(get_active)"
+  if [[ "$cur" != custom && -f "$VAR_DIR/$cur.json" ]]; then
+    log "Stage1 reapply (same config: $cur)"
+    # Re-copy the running profile: an edited profile file is applied by Restart, as before.
+    apply_variant "$cur"
+    set_active "$cur"
+  else
+    log "Stage1 reapply (same config: config.json matches no profile, restarted as is)"
+    reload_current
+  fi
+  echo "$(now)" > "$LAST_REAPPLY_FILE"
+  health_ok && fail_reset
+}
+
+rotate_stage2(){
+  local cur nxt
+  cur="$(get_active)"
+
+  mapfile -t configs < <(variants)
+  if (( ${#configs[@]} < 2 )); then
+    log "Stage2 rotate skipped (need >=2 configs in $VAR_DIR). Reapply only."
+    restart_stage1
+    return 0
+  fi
+
+  nxt="${configs[0]}"
+  for i in "${!configs[@]}"; do
+    if [[ "${configs[$i]}" == "$cur" ]]; then
+      nxt="${configs[$(( (i+1) % ${#configs[@]} ))]}"
+      break
+    fi
+  done
+
+  log "Stage2 rotate $cur -> $nxt"
+  set_active "$nxt"
+  apply_variant "$nxt"
+  echo "$(now)" > "$LAST_ROTATE_FILE"
+  health_ok && fail_reset
+}
+
+# ===== ENTRY =====
+CMD="${1:-}"
+ACTIVE="$(get_active)"
+if [[ "$ACTIVE" != custom && "$(tr -d '[:space:]' < "$ACTIVE_FILE" 2>/dev/null || true)" != "$ACTIVE" ]]; then set_active "$ACTIVE"; fi
+MODE="$(cat "$MODE_FILE" 2>/dev/null || echo "?")"
+TUN_UP="no"; ip link show "$TUN_IF" >/dev/null 2>&1 && TUN_UP="yes"
+log "SCAN mode=$MODE active=$ACTIVE tun_if=$TUN_IF up=$TUN_UP"
+
+case "$CMD" in
+  restart) restart_stage1; exit 0 ;;
+  rotate)  rotate_stage2; exit 0 ;;
+  status)  echo "mode=$MODE active=$ACTIVE tun_if=$TUN_IF up=$TUN_UP fails=$(fail_get)"; exit 0 ;;
+esac
+
+mode_is_tun || exit 0
+
+health_ok && fail_reset && exit 0
+
+FAIL="$(fail_get)"
+FAIL=$((FAIL+1))
+fail_set "$FAIL"
+log "FAIL=$FAIL"
+
+if [[ "$FAIL" -eq "$REAPPLY_AT" ]] && cooldown_ok "$LAST_REAPPLY_FILE" "$REAPPLY_COOLDOWN"; then
+  restart_stage1
+  exit 0
+fi
+
+if [[ "$FAIL" -ge "$ROTATE_AT" ]] && cooldown_ok "$LAST_ROTATE_FILE" "$ROTATE_COOLDOWN"; then
+  rotate_stage2
+fi

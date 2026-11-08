@@ -1,0 +1,11 @@
+[Unit]
+Description=Keep the two latest Ubuntu kernels for the Mini-PC router
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/lib/router-updater/kernel_policy.py enforce
+TimeoutStartSec=45min
+Nice=15
+UMask=0077
+

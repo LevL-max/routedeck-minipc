@@ -1,0 +1,10 @@
+network:
+  version: 2
+  renderer: networkd
+  ethernets:
+    @@WAN_IF@@:
+      dhcp4: true
+    @@LAN_IF@@:
+      addresses:
+        - 192.168.50.1/24
+      dhcp4: false

@@ -1,0 +1,14 @@
+[Unit]
+Description=Prepare selected physical WAN without changing the traffic mode
+After=network-online.target ModemManager.service
+Wants=network-online.target ModemManager.service
+Before=awg-auto.service router-restore.service xray.service mihomo.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/lib/router-wan/wan_control.py boot
+TimeoutStartSec=90
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

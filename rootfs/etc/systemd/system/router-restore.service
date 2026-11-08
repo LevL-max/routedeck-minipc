@@ -1,0 +1,13 @@
+[Unit]
+Description=Restore router runtime state (policy routing + NAT + selected mode)
+After=network-online.target awg-auto.service
+Wants=network-online.target
+Requires=awg-auto.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/router-restore-runtime
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

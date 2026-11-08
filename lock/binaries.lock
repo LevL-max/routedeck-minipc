@@ -1,0 +1,9 @@
+# Pinned downloads. Columns (TAB-separated):
+# name	version	asset	url	asset_sha256	binary_sha256	destination
+# asset_sha256 = GitHub release digest; binary_sha256 = the binary that runs on Mini-PC 2
+# (checked against its Router Updater / router-xray records on 2026-11-08).
+mihomo	v1.19.33	mihomo-linux-amd64-compatible-v1.19.33.gz	https://github.com/MetaCubeX/mihomo/releases/download/v1.19.33/mihomo-linux-amd64-compatible-v1.19.33.gz	386508bfb1c72c43b6a0eda73708ecdce82546581b0ebcb16366c53757c622b6	817f50b3ac6a8b1c4360c5cf2961906057f3a883d970ebbcb0028a01632b620f	/usr/local/bin/mihomo
+sing-box-lx	v1.14.4-lx.32	sing-box-1.14.4-lx.32-linux-amd64.tar.gz	https://github.com/Leadaxe/sing-box-lx/releases/download/v1.14.4-lx.32/sing-box-1.14.4-lx.32-linux-amd64.tar.gz	9b7734d5612cd146b22c7599d1beba8f60584502fe0233a51f2d8eef5c2454f1	a872bcf42e81eba72b8a4b3b1ceba437e3d8e8b730adcd4c974503ed44eea81a	/usr/bin/sing-box
+xray	v26.10.31	Xray-linux-64.zip	https://github.com/XTLS/Xray-core/releases/download/v26.10.31/Xray-linux-64.zip	e4bd9119f50ae7c41658b1abd0679ae06f98bd864a2907ff33f2f2cf7081b214	cc4b84d3069569f297a61f04b914f2bb37e9d202fd7b84cb50def1fc30fd40e1	/var/lib/router-xray/versions/v26.10.31/xray
+sing-box-deb	1.14.2	sing-box_1.14.2_linux_amd64.deb	https://github.com/SagerNet/sing-box/releases/download/v1.14.2/sing-box_1.14.2_linux_amd64.deb	3a15ee1ee918cb5297ccf7fb4356b31ba85f8a7c01da122c5b3e3aeda0568001	-	dpkg
+zashboard	v3.30.0	dist.zip	https://github.com/Zephyruso/zashboard/releases/download/v3.30.0/dist.zip	1f91c014e61e768240a86ad0a9bd565b247ec5a0e26b125fb5d19076682905b7	-	/etc/mihomo/zashboard

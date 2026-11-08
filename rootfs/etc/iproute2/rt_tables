@@ -1,0 +1,17 @@
+#
+# reserved values
+#
+255	local
+254	main
+253	default
+0	unspec
+#
+# local
+#
+#1	inr.ruhep
+100 awg
+200 vless
+300 wan
+110 tun0
+110 tun
+120 mihomo

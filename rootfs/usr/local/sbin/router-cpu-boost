@@ -1,0 +1,3 @@
+#!/bin/sh
+# CPU boost switch (see /usr/local/lib/router-cpu-boost/cpu_boost.py).
+exec /usr/bin/python3 /usr/local/lib/router-cpu-boost/cpu_boost.py "$@"

@@ -1,0 +1,13 @@
+[Unit]
+Description=Late verification of Mini-PC router runtime state
+After=network-online.target router-restore.service awg-auto.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStartPre=/bin/sleep 15
+ExecStart=/usr/local/sbin/router-runtime-ensure
+TimeoutStartSec=75
+
+[Install]
+WantedBy=multi-user.target

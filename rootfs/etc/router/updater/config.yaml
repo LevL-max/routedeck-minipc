@@ -1,0 +1,7 @@
+components:
+  sing-box:
+    binary: /usr/bin/sing-box
+  mihomo:
+    binary: /usr/local/bin/mihomo
+  awg:
+    dkms: amneziawg

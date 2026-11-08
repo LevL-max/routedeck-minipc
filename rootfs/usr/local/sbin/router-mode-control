@@ -1,0 +1,3 @@
+#!/bin/sh
+# router-core-v1: one mode controller for every mini-PC
+exec /usr/bin/python3 /usr/local/lib/router-core/mode_control.py "$@"

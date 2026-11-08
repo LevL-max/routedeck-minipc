@@ -1,0 +1,55 @@
+#!/bin/bash
+set -euo pipefail
+
+MODE_FILE="/etc/router/mode"
+MODE="$(cat "$MODE_FILE" 2>/dev/null || echo direct)"
+
+LAN_IF="@@LAN_IF@@"
+
+# Marks:
+# 0x0 = direct (no policy)
+# 0x1 = awg
+# 0x2 = tun (sing-box TUN)
+MARK_AWG="0x1"
+MARK_TUN="0x2"
+
+COMMENT="LAN_MODE_MARK"
+
+remove_rules() {
+  # Remove any existing LAN_MODE_MARK rules (for either mark)
+  while iptables -t mangle -C PREROUTING -i "$LAN_IF" -m comment --comment "$COMMENT" -j MARK --set-xmark "$MARK_AWG"/0xffffffff 2>/dev/null; do
+    iptables -t mangle -D PREROUTING -i "$LAN_IF" -m comment --comment "$COMMENT" -j MARK --set-xmark "$MARK_AWG"/0xffffffff
+  done
+
+  while iptables -t mangle -C PREROUTING -i "$LAN_IF" -m comment --comment "$COMMENT" -j MARK --set-xmark "$MARK_TUN"/0xffffffff 2>/dev/null; do
+    iptables -t mangle -D PREROUTING -i "$LAN_IF" -m comment --comment "$COMMENT" -j MARK --set-xmark "$MARK_TUN"/0xffffffff
+  done
+}
+
+apply_direct() {
+  remove_rules
+}
+
+apply_awg() {
+  remove_rules
+  iptables -t mangle -A PREROUTING -i "$LAN_IF" -m comment --comment "$COMMENT" \
+    -j MARK --set-xmark "$MARK_AWG"/0xffffffff
+}
+
+apply_tun() {
+  remove_rules
+  iptables -t mangle -A PREROUTING -i "$LAN_IF" -m comment --comment "$COMMENT" \
+    -j MARK --set-xmark "$MARK_TUN"/0xffffffff
+}
+
+case "$MODE" in
+  direct) apply_direct ;;
+  awg)    apply_awg ;;
+  tun)    apply_tun ;;
+  *)
+    echo "Unknown mode: $MODE (expected: direct|awg|tun)" >&2
+    exit 1
+    ;;
+esac
+
+echo "Applied LAN mode: $MODE"

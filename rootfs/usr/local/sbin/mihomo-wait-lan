@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+for _ in $(seq 1 150); do
+  ip -o -4 addr show dev "@@LAN_IF@@" 2>/dev/null | grep -q " 192.168.50.1/" && exit 0
+  sleep .2
+done
+echo "LAN address 192.168.50.1 not ready on @@LAN_IF@@" >&2
+exit 1

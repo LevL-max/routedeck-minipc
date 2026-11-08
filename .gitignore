@@ -1,0 +1,15 @@
+# This repository is public: no secrets, no personal host profiles.
+# Keep profiles and secrets.tar.gpg in a separate PRIVATE repository.
+*.tar
+*.tgz
+*.tar.gz
+*.gpg
+# ...except the public signing key of the Amnezia apt repository
+!rootfs/etc/apt/trusted.gpg.d/amnezia-ubuntu-ppa.gpg
+*.tmp
+secrets/
+authorized_keys
+hosts/*
+!hosts/example/
+__pycache__/
+*.pyc

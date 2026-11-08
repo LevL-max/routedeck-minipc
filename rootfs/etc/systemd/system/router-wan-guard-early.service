@@ -1,0 +1,19 @@
+[Unit]
+Description=Apply router-wan's LAN->WAN kill switch before the network starts (closes the boot window)
+Documentation=file:/usr/local/lib/router-wan/README.md
+DefaultDependencies=no
+After=local-fs.target netfilter-persistent.service
+Before=network-pre.target shutdown.target
+Wants=network-pre.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+TimeoutStartSec=30
+# Same rules router-wan applies later at boot and every 10 seconds; nothing else is changed.
+ExecStart=/usr/bin/python3 -B -c "import sys; sys.path.insert(0, '/usr/local/lib/router-wan'); import wan_network; wan_network.firewall()"
+ExecStartPost=-/bin/sh -c 'logger -t router-wan-guard-early "router-wan firewall applied before network; mode=$$(cat /etc/router/mode)"'
+LogLevelMax=notice
+
+[Install]
+WantedBy=multi-user.target

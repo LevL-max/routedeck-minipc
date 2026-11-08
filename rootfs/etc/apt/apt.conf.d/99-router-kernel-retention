@@ -1,0 +1,4 @@
+// Protect the running kernel before APT installs another version.
+DPkg::Pre-Install-Pkgs { "/usr/bin/python3 /usr/local/lib/router-updater/kernel_policy.py guard-install"; };
+// A separate worker waits for APT to finish; no recursive APT inside the hook.
+DPkg::Post-Invoke { "/usr/bin/systemctl --no-block start router-kernel-retention.service >/dev/null 2>&1 || true"; };

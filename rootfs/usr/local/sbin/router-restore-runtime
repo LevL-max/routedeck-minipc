@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+# router-core-v2: one runtime restore for every mini-PC (boot, repair, mode switch).
+# openflux-removed-v1: the OPENFLUX mode was removed on 2026-10-16.
+# Host facts live in /etc/router/core.env. A router-wan host (Ethernet/LTE
+# failover) takes its WAN interface from router-wan and adapts it on exit.
+# DIRECT/AWG/TUN still run this host's preserved legacy engine.
+[[ -r /etc/router/core.env ]] && . /etc/router/core.env
+MODE="${ROUTER_MODE_OVERRIDE:-$(cat /etc/router/mode 2>/dev/null || echo direct)}"
+MODE_FILE="/etc/router/mode"
+WAN_STACK="${WAN_STACK:-static}"
+LAN_IF="${LAN_IF:-@@LAN_IF@@}"
+LAN_CIDR="${LAN_CIDR:-192.168.50.0/24}"
+if [[ "$WAN_STACK" == router-wan ]]; then WAN_IF="$(/usr/local/sbin/router-wan interface)"; else WAN_IF="${WAN_IF:-@@WAN_IF@@}"; fi
+WG_IF="wg0"; TUN_IF="tun0"; MIHOMO_IF="mihomo0"
+LEGACY="/usr/local/lib/router-mihomo/legacy/router-restore-runtime"
+APPLY="/usr/local/sbin/router-apply-mode"
+
+remove_nat(){ while iptables -t nat -C POSTROUTING -s "$LAN_CIDR" -o "$1" -j MASQUERADE 2>/dev/null; do iptables -t nat -D POSTROUTING -s "$LAN_CIDR" -o "$1" -j MASQUERADE; done; }
+ensure_nat(){ iptables -t nat -C POSTROUTING -s "$LAN_CIDR" -o "$1" -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s "$LAN_CIDR" -o "$1" -j MASQUERADE; }
+remove_guard(){ while iptables -C FORWARD -i "$LAN_IF" -o "$WAN_IF" -m mark --mark 0x3/0xffffffff -m comment --comment "MIHOMO_FAIL_CLOSED" -j REJECT 2>/dev/null; do iptables -D FORWARD -i "$LAN_IF" -o "$WAN_IF" -m mark --mark 0x3/0xffffffff -m comment --comment "MIHOMO_FAIL_CLOSED" -j REJECT; done; }
+flush_ct(){ command -v conntrack >/dev/null 2>&1 || return 0; conntrack -D -s "$LAN_CIDR" >/dev/null 2>&1 || true; conntrack -D -d "$LAN_CIDR" >/dev/null 2>&1 || true; }
+remove_mark(){ local m="$1"; while iptables -t mangle -C PREROUTING -i "$LAN_IF" -m comment --comment LAN_MODE_MARK -j MARK --set-xmark "$m"/0xffffffff 2>/dev/null; do iptables -t mangle -D PREROUTING -i "$LAN_IF" -m comment --comment LAN_MODE_MARK -j MARK --set-xmark "$m"/0xffffffff; done; }
+cleanup_mihomo(){
+  systemctl stop mihomo.service >/dev/null 2>&1 || true
+  remove_nat "$MIHOMO_IF"; remove_guard
+  while ip rule del fwmark 0x3 lookup 120 priority 120 2>/dev/null; do :; done
+  ip route flush table 120 2>/dev/null || true
+  remove_mark 0x3
+}
+verify_basic(){
+  local m="$1"
+  case "$m" in
+    direct)
+      ! iptables -t mangle -S PREROUTING 2>/dev/null | grep -F -- '--comment LAN_MODE_MARK' | grep -q . && iptables -t nat -C POSTROUTING -s "$LAN_CIDR" -o "$WAN_IF" -j MASQUERADE 2>/dev/null ;;
+    awg)
+      ip link show wg0 >/dev/null 2>&1 && ip rule show | grep -Eq 'fwmark 0x1([^0-9a-f]|$).*lookup (awg|100)' && ip route show table 100 | grep -Eq '^default .*dev wg0([[:space:]]|$)' && iptables -t mangle -S PREROUTING | grep -F -- '--set-xmark 0x1/' >/dev/null ;;
+    tun)
+      ip link show tun0 >/dev/null 2>&1 && ip rule show | grep -Eq 'fwmark 0x2([^0-9a-f]|$).*lookup (tun|tun0|110)' && ip route show table 110 | grep -Eq '^default .*dev tun0([[:space:]]|$)' && iptables -t mangle -S PREROUTING | grep -F -- '--set-xmark 0x2/' >/dev/null ;;
+    mihomo)
+      ip link show mihomo0 >/dev/null 2>&1 && ip rule show | grep -Eq 'fwmark 0x3([^0-9a-f]|$).*lookup (mihomo|120)' && ip route show table 120 | grep -Eq '^default .*dev mihomo0([[:space:]]|$)' && iptables -t mangle -S PREROUTING | grep -F -- '--set-xmark 0x3/' >/dev/null ;;
+  esac
+}
+
+# Serialize boot/repair without holding up the LAN panel on a failed transport.
+if [[ "${ROUTER_MODE_LOCK_HELD:-0}" != 1 ]]; then
+  exec 9>/run/lock/router-mode.lock
+  flock -w 10 9 || { echo "Another mode operation is running" >&2; exit 75; }
+  export ROUTER_MODE_LOCK_HELD=1
+fi
+# On failure the target mode stays selected and fail-closed: the router mode
+# controller decides about returning to another mode.
+on_exit(){
+  rc=$?
+  trap - EXIT INT TERM HUP
+  if [[ $rc -ne 0 ]]; then
+    /usr/local/sbin/router-mode-control guard "$MODE" >/dev/null 2>&1 || true
+    echo "$MODE remains selected; use Restart/Rotate to retry" >&2
+  fi
+  if [[ "$WAN_STACK" == router-wan ]]; then /usr/local/sbin/router-wan adapt || true; fi
+  exit "$rc"
+}
+trap on_exit EXIT
+trap 'exit 143' TERM HUP
+trap 'exit 130' INT
+/usr/local/sbin/router-mode-control guard "$MODE"
+
+if [[ "$MODE" != mihomo ]]; then
+  cleanup_mihomo
+  if ! ROUTER_MODE_OVERRIDE="$MODE" "$LEGACY" || ! verify_basic "$MODE"; then
+    exit 1
+  fi
+  exit 0
+fi
+
+# MIHOMO target.
+systemctl stop sing-box.service >/dev/null 2>&1 || true
+/usr/bin/awg-quick down "$WG_IF" >/dev/null 2>&1 || true
+ip rule add fwmark 0x3 lookup 120 priority 120 2>/dev/null || true
+ip route replace unreachable default table 120 metric 32767
+remove_nat "$WAN_IF"; remove_nat "$WG_IF"; remove_nat "$TUN_IF"; remove_nat "$MIHOMO_IF"
+remove_guard
+iptables -I FORWARD 1 -i "$LAN_IF" -o "$WAN_IF" -m mark --mark 0x3/0xffffffff -m comment --comment MIHOMO_FAIL_CLOSED -j REJECT
+systemctl start mihomo.service
+for _ in $(seq 1 150); do ip link show "$MIHOMO_IF" >/dev/null 2>&1 && break; sleep .2; done
+if ! ip link show "$MIHOMO_IF" >/dev/null 2>&1; then
+  exit 1
+fi
+ip route replace default dev "$MIHOMO_IF" table 120 metric 10
+ensure_nat "$MIHOMO_IF"
+if ! ROUTER_MODE_OVERRIDE=mihomo "$APPLY" || ! verify_basic mihomo; then
+  exit 1
+fi
+iptab(){ iptables -t mangle -C FORWARD "$@" 2>/dev/null || iptables -t mangle -A FORWARD "$@"; }
+iptab -o "$MIHOMO_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+iptab -i "$MIHOMO_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+flush_ct
+verify_basic mihomo || exit 1
+echo "LAN mode: mihomo (full TUN TCP+UDP, fail-closed)"

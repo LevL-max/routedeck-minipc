@@ -1,0 +1,234 @@
+#!/bin/bash
+set -euo pipefail
+# AWG watchdog: restart after 3 failed checks, rotate profile after 6 (cooldowns apply).
+# 2026-09-28: the active profile is read from wg0.conf itself (peer PublicKey + Endpoint), not
+# from a /run file that is lost on reboot, so "restart (same config)" keeps the running server.
+# The selection files shared with router-wan are kept in sync. The traffic guard counts received
+# bytes only and is evaluated once per run. `watchdog-rotator probe` prints the profile and exits.
+
+WG_IF="wg0"
+WG_DIR="/etc/amnezia/amneziawg"
+VAR_DIR="$WG_DIR/variants"
+VARIANTS=(temp_1 temp_2)
+ACTIVE_WGCONF="$WG_DIR/wg0.conf"
+PERSIST_FILE="$WG_DIR/active"
+
+LOG="/var/log/watchdog-rotator.log"
+
+STATE_DIR="/run/watchdog-rotator"
+ACTIVE_FILE="$STATE_DIR/active"
+FAIL_FILE="$STATE_DIR/fail_count"
+LOCK_FILE="$STATE_DIR/lock"
+LAST_RESTART_FILE="$STATE_DIR/last_restart"
+LAST_ROTATE_FILE="$STATE_DIR/last_rotate"
+LAST_RX_FILE="$STATE_DIR/last_rx"
+
+# ===== TUNABLES =====
+MAX_HANDSHAKE_AGE=180
+RESTART_AT=3
+ROTATE_AT=6
+RESTART_COOLDOWN=60
+ROTATE_COOLDOWN=300
+
+# Received bytes on wg0 since the previous run also count as healthy (sent bytes do not).
+TRAFFIC_GUARD=1
+
+RESTORE="/usr/local/sbin/router-restore-runtime"
+
+AWG="$(command -v awg)"
+AWGQ="$(command -v awg-quick)"
+
+now(){ date +%s; }
+
+# Peer identity of a profile: its PublicKey and Endpoint values (as router-wan's peer_identity).
+identity(){
+  grep -i -E '^[[:space:]]*(publickey|endpoint)[[:space:]]*=' "$1" 2>/dev/null \
+    | sed -E 's/^[^=]*=[[:space:]]*//; s/[[:space:]]*(#.*)?$//' | tr '\n' '|' || true
+}
+
+valid_variant(){
+  local v
+  for v in "${VARIANTS[@]}"; do [[ "$1" == "$v" && -f "$VAR_DIR/$v.conf" ]] && return 0; done
+  return 1
+}
+
+# The profile that is really running: wg0.conf identity first, then the persistent selection
+# (router-wan writes it as well and it survives reboot), then the runtime file, else "custom".
+get_active(){
+  local cur v saved
+  cur="$(identity "$ACTIVE_WGCONF")"
+  if [[ -n "$cur" ]]; then
+    for v in "${VARIANTS[@]}"; do
+      if [[ -f "$VAR_DIR/$v.conf" && "$(identity "$VAR_DIR/$v.conf")" == "$cur" ]]; then echo "$v"; return; fi
+    done
+  fi
+  for saved in "$(cat "$PERSIST_FILE" 2>/dev/null || true)" "$(cat "$ACTIVE_FILE" 2>/dev/null || true)"; do
+    saved="$(tr -d '[:space:]' <<<"$saved")"
+    if valid_variant "$saved"; then echo "$saved"; return; fi
+  done
+  echo custom
+}
+
+handshake_age(){
+  # Pick the most recent non-zero handshake timestamp across all peers.
+  # If none exist, return "na".
+  local n ts age
+  n="$(now)"
+
+  ts="$("$AWG" show "$WG_IF" latest-handshakes 2>/dev/null \
+        | awk '$2 ~ /^[0-9]+$/ && $2 > 0 { if ($2 > m) m=$2 } END { if (m>0) print m }')"
+
+  if [[ -z "${ts:-}" ]]; then
+    echo "na"
+    return
+  fi
+
+  age=$(( n - ts ))
+
+  # Sanity: negative or absurd values mean "invalid"
+  if (( age < 0 || age > 86400 )); then
+    echo "na"
+    return
+  fi
+
+  echo "$age"
+}
+
+if [[ "${1:-}" == probe ]]; then
+  echo "active=$(get_active) hs_age=$(handshake_age)s"
+  exit 0
+fi
+
+mkdir -p "$STATE_DIR"
+
+ts(){ date '+%F %T'; }
+log(){ echo "[$(ts)] $*" >> "$LOG"; }
+
+touch "$LOG"
+chmod 600 "$LOG" 2>/dev/null || true
+
+exec 9>"$LOCK_FILE"
+flock -n 9 || exit 0
+
+set_active(){
+  echo "$1" > "$ACTIVE_FILE"
+  if [[ "$(tr -d '[:space:]' < "$PERSIST_FILE" 2>/dev/null || true)" != "$1" ]]; then echo "$1" > "$PERSIST_FILE"; fi
+}
+fail_get(){ [[ -f "$FAIL_FILE" ]] && cat "$FAIL_FILE" || echo 0; }
+fail_set(){ echo "$1" > "$FAIL_FILE"; }
+fail_reset(){ echo 0 > "$FAIL_FILE"; }
+
+cooldown_ok(){
+  local f="$1" s="$2"
+  local n l
+  n="$(now)"; l=0
+  [[ -f "$f" ]] && l="$(cat "$f" 2>/dev/null || echo 0)"
+  (( n - l >= s ))
+}
+
+# Received bytes grew since the previous run. Call once per run: it stores the new baseline.
+rx_increasing(){
+  (( TRAFFIC_GUARD == 1 )) || return 1
+  local cur prev
+  cur="$(cat "/sys/class/net/$WG_IF/statistics/rx_bytes" 2>/dev/null || true)"
+  [[ "$cur" =~ ^[0-9]+$ ]] || return 1
+  prev="$(cat "$LAST_RX_FILE" 2>/dev/null || true)"
+  echo "$cur" > "$LAST_RX_FILE"
+  [[ "$prev" =~ ^[0-9]+$ ]] || return 1
+  (( cur > prev ))
+}
+
+handshake_ok(){
+  local a
+  a="$(handshake_age)"
+  [[ "$a" != "na" ]] && (( a < MAX_HANDSHAKE_AGE ))
+}
+
+reload_tunnel(){
+  "$AWGQ" down "$WG_IF" >/dev/null 2>&1 || true
+  "$AWGQ" up "$WG_IF" >/dev/null 2>&1 || true
+  "$RESTORE" >/dev/null 2>&1 || true
+    command -v conntrack >/dev/null 2>&1 && conntrack -D -s 192.168.50.0/24 >/dev/null 2>&1 || true
+    sleep 1
+    command -v conntrack >/dev/null 2>&1 && conntrack -D -s 192.168.50.0/24 >/dev/null 2>&1 || true
+}
+
+apply_variant(){
+  local v="$1"
+  cp -a "$VAR_DIR/$v.conf" "$ACTIVE_WGCONF"
+  reload_tunnel
+}
+
+restart_stage1(){
+  local cur
+  cur="$(get_active)"
+  if valid_variant "$cur"; then
+    log "Stage1 restart (same config: $cur)"
+    # Re-copy the running profile: an edited profile file is applied by Restart, as before.
+    apply_variant "$cur"
+    set_active "$cur"
+  else
+    log "Stage1 restart (same config: wg0.conf matches no profile, restarted as is)"
+    reload_tunnel
+  fi
+  echo "$(now)" > "$LAST_RESTART_FILE"
+  handshake_ok && fail_reset
+}
+
+rotate_stage2(){
+  local cur nxt v
+  cur="$(get_active)"
+  nxt=""
+  for v in "${VARIANTS[@]}"; do
+    if [[ "$v" != "$cur" ]] && valid_variant "$v"; then nxt="$v"; break; fi
+  done
+  if [[ -z "$nxt" ]]; then
+    log "Stage2 rotate skipped: no other profile in $VAR_DIR"
+    return 0
+  fi
+  log "Stage2 rotate $cur -> $nxt"
+  apply_variant "$nxt"
+  set_active "$nxt"
+  echo "$(now)" > "$LAST_ROTATE_FILE"
+  handshake_ok && fail_reset
+}
+
+# ===== ENTRY =====
+CMD="${1:-}"
+
+ACTIVE="$(get_active)"
+if valid_variant "$ACTIVE"; then set_active "$ACTIVE"; fi
+AGE="$(handshake_age)"
+RX_UP=0
+if rx_increasing; then RX_UP=1; fi
+
+if (( RX_UP )); then
+  log "SCAN active=$ACTIVE hs_age=${AGE}s rx=up"
+else
+  log "SCAN active=$ACTIVE hs_age=${AGE}s rx=none"
+fi
+
+case "$CMD" in
+  restart) restart_stage1; exit 0 ;;
+  rotate)  rotate_stage2; exit 0 ;;
+  status)
+    echo "active=$ACTIVE hs_age=${AGE}s"
+    exit 0
+    ;;
+esac
+
+if (( RX_UP )) || handshake_ok; then fail_reset; exit 0; fi
+
+FAIL="$(fail_get)"
+FAIL=$((FAIL+1))
+fail_set "$FAIL"
+log "FAIL=$FAIL"
+
+if [[ "$FAIL" -eq "$RESTART_AT" ]] && cooldown_ok "$LAST_RESTART_FILE" "$RESTART_COOLDOWN"; then
+  restart_stage1
+  exit 0
+fi
+
+if [[ "$FAIL" -ge "$ROTATE_AT" ]] && cooldown_ok "$LAST_ROTATE_FILE" "$ROTATE_COOLDOWN"; then
+  rotate_stage2
+fi

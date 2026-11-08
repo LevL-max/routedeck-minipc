@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+ACTION="${1:-}"; MODE="$(cat "/etc/router/mode" 2>/dev/null || echo direct)"; LAN_CIDR="192.168.50.0/24"; IF="mihomo0"
+remove_nat(){ while iptables -t nat -C POSTROUTING -s "$LAN_CIDR" -o "$IF" -j MASQUERADE 2>/dev/null; do iptables -t nat -D POSTROUTING -s "$LAN_CIDR" -o "$IF" -j MASQUERADE; done; }
+ip rule add fwmark 0x3 lookup 120 priority 120 2>/dev/null || true
+ip route replace unreachable default table 120 metric 32767
+case "$ACTION" in
+ post-start)
+   if [[ "$MODE" == mihomo ]]; then
+     for _ in $(seq 1 100); do ip link show "$IF" >/dev/null 2>&1 && break; sleep .2; done
+     if ip link show "$IF" >/dev/null 2>&1; then ip route replace default dev "$IF" table 120 metric 10; remove_nat; iptables -t nat -A POSTROUTING -s "$LAN_CIDR" -o "$IF" -j MASQUERADE; fi
+   fi ;;
+ post-stop) ip route del default dev "$IF" table 120 2>/dev/null || true; remove_nat; ip route replace unreachable default table 120 metric 32767 ;;
+esac

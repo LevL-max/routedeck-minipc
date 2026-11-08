@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+# router-runtime-ensure; OpenFlux removed 2026-10-16 (openflux-removed-v1)
+MODE="$(cat /etc/router/mode 2>/dev/null || echo unknown)"
+LAN_IF="@@LAN_IF@@"; LAN_CIDR="192.168.50.0/24"; WAN_IF="@@WAN_IF@@"
+RESTORE="/usr/local/sbin/router-restore-runtime"; LOG="/var/log/router-runtime-ensure.log"
+log(){ echo "[$(date '+%F %T')] $*" >> "$LOG"; }
+has_nat(){ iptables -t nat -C POSTROUTING -s "$LAN_CIDR" -o "$1" -j MASQUERADE 2>/dev/null; }
+has_mark(){ iptables -t mangle -S PREROUTING 2>/dev/null | grep -F -- '--comment LAN_MODE_MARK' | grep -Fq -- "--set-xmark $1/0xffffffff"; }
+has_route(){ ip route show table "$1" 2>/dev/null | grep -Eq "^default .*dev $2([[:space:]]|$)"; }
+check_direct(){ ! iptables -t mangle -S PREROUTING 2>/dev/null | grep -Fq -- '--comment LAN_MODE_MARK' || return 1; has_nat "$WAN_IF"; }
+check_awg(){ ip link show wg0 >/dev/null 2>&1 && ip rule show | grep -Eq 'fwmark 0x1([^0-9a-f]|$).*lookup (awg|100)' && (has_route awg wg0 || has_route 100 wg0) && has_mark 0x1 && has_nat wg0; }
+check_tun(){ ip link show tun0 >/dev/null 2>&1 && ip rule show | grep -Eq 'fwmark 0x2([^0-9a-f]|$).*lookup (tun|tun0|110)' && (has_route tun tun0 || has_route tun0 tun0 || has_route 110 tun0) && has_mark 0x2 && has_nat tun0; }
+check_mihomo(){ ip link show mihomo0 >/dev/null 2>&1 && ip rule show | grep -Eq 'fwmark 0x3([^0-9a-f]|$).*lookup (mihomo|120)' && has_route 120 mihomo0 && has_mark 0x3 && has_nat mihomo0; }
+check(){ case "$MODE" in direct) check_direct;; awg) check_awg;; tun) check_tun;; mihomo) check_mihomo;; *) return 1;; esac; }
+if [[ "${1:-}" == "check-only" ]]; then check; exit $?; fi
+if check; then log "runtime OK mode=$MODE"; exit 0; fi
+log "runtime inconsistent mode=$MODE - invoking router-restore-runtime"
+"$RESTORE"
+MODE="$(cat /etc/router/mode 2>/dev/null || echo unknown)"
+check || { log "repair FAILED mode=$MODE"; exit 1; }
+log "repair OK mode=$MODE"

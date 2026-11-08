@@ -1,0 +1,11 @@
+[Unit]
+Description=Local Xray update rollback watchdog
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=15s
+AccuracySec=1s
+Unit=xray-recover.service
+
+[Install]
+WantedBy=timers.target

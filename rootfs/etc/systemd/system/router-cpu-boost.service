@@ -1,0 +1,11 @@
+[Unit]
+Description=Apply the saved CPU boost choice (router panel toggle)
+After=systemd-modules-load.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/router-cpu-boost apply
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

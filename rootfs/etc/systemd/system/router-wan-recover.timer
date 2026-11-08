@@ -1,0 +1,11 @@
+[Unit]
+Description=Independent WAN rollback deadline
+
+[Timer]
+OnBootSec=20
+OnUnitActiveSec=5
+AccuracySec=1
+Unit=router-wan-recover.service
+
+[Install]
+WantedBy=timers.target

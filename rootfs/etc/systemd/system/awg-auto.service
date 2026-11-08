@@ -1,0 +1,12 @@
+[Unit]
+Description=Auto-start AWG when mode=awg
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c '[ "$(cat /etc/router/mode 2>/dev/null)" = "awg" ] && /usr/bin/awg-quick up wg0 || true'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
