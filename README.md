@@ -126,6 +126,7 @@ python3 tools/import_snapshot.py --repo . --base pc --snapshot pc=/вне/реп
     --profiles-out ~/my-profiles --secrets-out /вне/репо/plain
 python3 lib/render.py verify --host-env ~/my-profiles/pc/host.env --snapshot-manifest <meta/manifest.txt из снимка>
 bash tools/encrypt-secrets.sh ~/my-profiles /вне/репо/plain/pc.tar      # пароль вводите сами
+bash tools/check-secrets.sh ~/my-profiles /вне/репо/plain                # архив открывается этим паролем?
 ```
 
 ## Состав
@@ -136,5 +137,5 @@ lib/render.py               сборка rootfs для хоста, устано�
 rootfs/ + rootfs.manifest   файлы роутера с метками @@WAN_IF@@, @@LAN_IF@@ и др.
 hosts/example/host.env      шаблон профиля
 lock/                       версии бинарников, пакеты, состояния служб
-tools/                      снимок с рабочего ПК, импорт, шифрование секретов
+tools/                      снимок с рабочего ПК, импорт, шифрование и проверка секретов
 ```
